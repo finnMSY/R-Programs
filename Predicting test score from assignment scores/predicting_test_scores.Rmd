@@ -1,0 +1,267 @@
+---
+title: Predicting student's test scores based on their first two assignment and quiz
+  scores using the best model and parameters
+author: "Finn Massey"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Part 1 - Loading in appropriate libraries 
+
+```{r}
+# Libraries being used
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(ggplot2)
+  library(GGally)
+  library(dplyr)
+  library(car)
+  library(mgcv)
+  library(MuMIn)
+  library(insight)
+  library(crossval)
+  library(pROC)
+})
+```
+
+## Part 2 - Loading in the data
+
+```{r}
+stats330 <- read.csv("stats330_grades.csv", stringsAsFactors=T)
+```
+
+## Part 3 - A pairs plot of the data
+
+```{r, warning = FALSE, message = FALSE}
+ggpairs(stats330, columns = 2:6)
+```
+<br>
+While almost all the variable combinations have a correlation of around 0.4, the relationship between a1 and a2 have a correlation of 0.643 which is the highest correlated pair of variables. According to the designated graph, this correlation represents a strong positive linear relationship between to two variables meaning that as a1 increases so does a2. There is an exception of a few outliers which occur when one of the two variables have a score of 0.<br>
+The variable pair with the lowest correlation is q2 and test with a correlation of 0.278. The corresponding graph looks very scatter with no obvious visible trend.
+
+## Part 4 - Appropriate numeric summaries for all the variables.
+
+```{r}
+summary(stats330)
+```
+From this summary we can see that there are a number of missing entries in all of the variables which will need to be removed before we fit any models to the data. We also learnt that the max score for the two test were 10/10, 94.5/100 for assignment 1 and 77.5 for assignment 2, and 94.5 for the test. Quiz 2 had the highest mean with 7.374 / 10 and assignment 2 had the lowest mean with 46.26 / 80. Another interesting fact is that the only variable where the minimum isn't zero is the test.
+
+## Part 5 - Cleaning the data
+
+```{r}
+# Remove all entries with at least one empty value
+stats330_clean <- stats330[rowSums(is.na(stats330)) == 0,]
+```
+
+## Part 6 - The variance inflation factor 
+
+```{r}
+stats330.fit <- glm(test ~ a1 + a2 + q1 + q2, data=stats330_clean)
+vif(stats330.fit)
+```
+The variance inflation factor explains the level of multicollinearity that exists between the variable and the other independent variables in a regression model.as well as the extent to which the variance of the estimated coefficient is increased due to multicollinearity. Since the VIF values for all variables are less than 5 best still fairly close to 1, we can say that it suggests a moderate level of multicollinearity. While there most likely still is some correlation with other variables it is not substantial enough to cause any issues.
+
+## Part 7 - Fitting a GAM model
+
+### Part A - Fitting the model
+
+```{r}
+stats330_gam.fit = gam(test ~ q1 + q2 + a1 + a2, family="gaussian", data = stats330_clean)
+```
+I have chosen the Gaussian family (normal distribution) because its accepted that most data collected which involves human behavior has a normal distribution and this variable appear to be no different as shown by the distribution graph for test in the pairs plot. The family shouldn't be binomial as the test column isn't binary, and it shouldn't be poisson because the test column doesn't contain counts. I felt that the Gaussian/normal distribution best described the test column due to it having scores created by human students.
+
+### Part B - Smoothing the appropriate numerical variables
+
+```{r}
+stats330_gam.fit = gam(test ~ q1 + q2 + s(a1) + s(a2), family="gaussian", data = stats330_clean)
+```
+
+### Part C - Output plots
+
+```{r}
+plot(stats330_gam.fit)
+```
+
+### Part D - Comment on the plots
+
+As observed from the 2 graphs above, we'll probably need a quadratic term for a2 as you probably couldn't fit a straight line through the graph without touching the dotted lines and the sample line is very curved, and you'd also potentially need a quadratic term for a1 as the dotted lines appear to cross over meaning it would be impossible for a line to go through the graph and not touch a dotted line. 
+
+## Part 8 - Fitting a model using dredge()
+
+```{r}
+options(na.action = "na.fail")
+lm_initial = glm(test ~ q1 + q2 + a1 + I(a1^2) + a2 + I(a2^2), family="gaussian", data = stats330_clean)
+dredge(lm_initial, rank = "AIC")
+dredge(lm_initial, rank = "BIC")
+
+```
+
+## Part 9 - A function that will enable cross validation
+
+```{r}
+predfun.lm <- function(train.x, train.y, test.x, test.y) {
+  lm1.fit <- lm(train.y ~ a1 + a2 + I(a2^2) + q1, data=train.x)
+  ynew <- predict(lm1.fit, test.x)
+  out1 <- mean((ynew - test.y)^2)
+  
+  lm2.fit <- lm(train.y ~ I(a1^2) + a2 + I(a2^2) + q1, data=train.x)
+  ynew <- predict(lm2.fit, test.x)
+  out2 <- mean((ynew - test.y)^2)
+  
+  lm3.fit <- lm(train.y ~ a1 + I(a1^2) + a2 + I(a2^2) + q1, data=train.x)
+  ynew <- predict(lm3.fit, test.x)
+  out3 <- mean((ynew - test.y)^2)
+  
+  lm4.fit <- lm(train.y ~ I(a2^2) + q1, data=train.x)
+  ynew <- predict(lm4.fit, test.x)
+  out4 <- mean((ynew - test.y)^2)
+  
+  lm5.fit <- lm(train.y ~ a1 + a2 + I(a2^2) + q1, data=train.x)
+  ynew <- predict(lm5.fit, test.x)
+  out5 <- mean((ynew - test.y)^2)
+  
+  lm6.fit <- lm(train.y ~ a2 + I(a2^2) + q1, data=train.x)
+  ynew <- predict(lm6.fit, test.x)
+  out6 <- mean((ynew - test.y)^2)
+  
+  lm7.fit <- lm(train.y ~ a1*a2 + a1*q1 + a1*q2 + a2*q1 + a2*q2 + q1*q2, data=train.x)
+  ynew <- predict(lm7.fit, test.x)
+  out7 <- mean((ynew - test.y)^2)
+  
+  c(out1, out2, out3, out4, out5, out6, out7)
+}
+```
+
+## Part 10 - Total number of parameters
+
+The all-interactions model has 11 parameters, test, a1, a2, q1, q2, a1:a2, a1:q1, a1:q2, a2:q1, a2:q2, and q1:q2.
+
+## Part 11 - Performing cross validation
+
+```{r}
+set.seed(592) 
+cv.out = crossval(predfun.lm, X = stats330_clean[, 3:6], Y = stats330_clean[, 2], K = 10, B = 500, verbose = FALSE)
+round(cv.out$stat, 2)
+```
+The models with the lowest mean squared prediction error was model 1 and 5 which are actually the same model: test ~ a1 + a2 + I(a2^2) + q1. This model had the lowest AIC score and the 2nd lowest BIC score. <br>
+While it was in this case, the model with the lowest AIC/BIC or the most predictors isn't necessarily also the best predictive models because it might be over fitting to the data. If a model has a larger amount of predictors, it may have a low AIC or BIC score due to its ability to fit the training data well, but it not it's ability to generalize new and unseen data and making predictions on new data. A model with a large amount of predictors would also increase in its complexity which would give it a higher probability to detect noise and may have higher variance than other models. This could make models with low BIC or AIC not actually be the most appropriate models which is why it is also important to do further tests on your model rather than just rely on the AIC and BIC scores.
+
+## Part 12 - Testing the model by predicting my own test score
+
+```{r}
+# Prediction model
+prediction_model <- lm(test ~ a1 + a2 + I(a2^2) + q1, data=stats330_clean)
+# Update your scores here.
+my_data <- data.frame(a1 = 49.5, a2 = 31, q1 = 8, q2 = 4)
+# This creates a confidence interval for the mean test score for
+# students with these assessments scores
+predict(prediction_model, newdata = my_data, interval = "confidence")
+# This creates a prediction interval for an individual with
+# these assessment scores
+predict(prediction_model, newdata = my_data, interval = "prediction")
+
+```
+
+## Part 13 - Comment on these results
+
+The prediction interval is wider than the confidence interval because while the confidence interval only takes into account the range of uncertainty of the estimate, the prediction interval also takes into account the variability of the data. The confidence interval is used to estimate the population mean whereas the prediction interval is used to predict any specific point meaning that the range of uncertainty of any specific predicted value is bound to be wider than the range of uncertainty of just the population mean.
+
+## Part 14 - A confidence interval using non-parametric bootstrapping
+
+```{r}
+set.seed(592)
+my_vector <- unlist(my_data)
+
+n_iterations <- 1000
+bootstrap_means <- numeric(n_iterations)
+true_score <- 40
+
+i <- 1
+while (i <= n_iterations) {
+  bootstrap_sample <- sample(my_vector, replace = TRUE)
+  bootstrap_means[i] <- mean(bootstrap_sample)
+  i <- i + 1
+}
+c(2*true_score-quantile(bootstrap_means, 0.975, na.rm = TRUE), 2*true_score-quantile(bootstrap_means, 0.025, na.rm = TRUE))
+```
+This confidence interval means that we are 95% confident that the true mean of test scores with my assessment scores will lie within the range 39.75 - 74. Out of the 1000 iterations if non-parametric bootstrapping we did 95% of those test score means would be within the range of 39.75 - 74.
+
+## Part 15 - Creating the 'pass' variable
+
+```{r}
+stats330_clean <- stats330_clean %>%
+  mutate(pass = ifelse(test >= 50, 1, 0)) %>%
+  glimpse()
+```
+
+## Part 16 - Fitting a model predicting 'pass'
+
+```{r}
+passing_model.fit <- glm(pass ~ q1, family="binomial", data=stats330_clean)
+```
+
+## Part 17 - An ROC curve
+
+```{r}
+
+passing_model.roc <- roc(response = stats330_clean$pass, predictor = fitted.values(passing_model.fit))
+plot(passing_model.roc, col = "blue", grid = TRUE, lwd=2.5, print.thres = "best")
+```
+
+## Part 18 - The AUC value
+
+```{r}
+auc_value <- auc(passing_model.roc)
+auc_value
+```
+
+## Part 19 - The threshold grade
+
+```{r}
+optimal_cutoff <- coords(passing_model.roc, "best")
+optimal_cutoff
+```
+This shows that the optimal cutoff is it at the point which maximises both specificity and sensitivity which is 0.9259259, 0.3802817. The threshold for q1 to reach this maximised point is 0.8251556.
+
+## Part 20 - The use of this threshold grade
+
+The optimal threshold for q1 0.8251556 but since q1 scores can only be in whole numbers we have to choose whether to round down or up. If we round the threshold up we would be prioritising specificity more than sensitivity because we would be trying to minimise false positives so that only students who truly need support receive the intervention email. If we round the threshold down we would be prioritising sensitivity more than specificity because we would be trying to minimise false negatives so that all students who need support will receive the intervention email. I think in this situation sensitivity is more important than specificity because if we're trying to predict which students will fail the test this early, it would be less harmful to send the letter to someone who doesn't need to then to not send it to someone who does. Due to this we should round the optimal threshold down to 0.8. <br>
+<u>Instructions:</u>
+Send the intervention letter to any student who scores a 8 or less in q1.
+
+## Part 21 - A confusion matrix
+
+```{r}
+confusion_matrix <- table(actual = stats330_clean$pass, pred = round(fitted(passing_model.fit)))
+confusion_matrix
+fp <- confusion_matrix[3]
+tp <- confusion_matrix[4]
+fn <- confusion_matrix[2]
+tn <- confusion_matrix[1]
+fpr <- fp/(fp+tn)
+tpr <- tp/(tp+fn)
+pred_error <- (fp+fn)/(fp+fn+tn+tp)
+```
+Here is the false positive rate:
+```{r}
+fpr
+```
+Here is the true positive rate:
+```{r}
+tpr
+```
+Here is the prediction error:
+```{r}
+pred_error
+```
+
+## Part 22 - Comment on results
+
+There is a chance this model might have over fit to this dataset meaning that when it is exposed to new data the strong patterns and generalisations it made thoroughly on this dataset might not translate to the new dataset therefore resulting in a much higher prediction error. Another reason could be that this dataset isn't actually very big with only 98 rows in the cleaned dataset, which means it might not have had enough data to properly learn all the patterns need to properly predict on new data. We could get a more concrete estimate of the prediction error by performing cross validation or training on more independent data before testing on new data.
