@@ -1,0 +1,228 @@
+---
+title: "Comparing the miss-clarification rates of multiple machine learning models"
+author: "Finn Massey"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# R Libraries
+suppressMessages({
+  library(tidyverse)
+  library(glmnet)
+  library(ranger)
+  library(xgboost) 
+  library(ggplot2)
+})
+```
+
+## Task 1 - Import the data
+
+```{r}
+# A)
+set.seed(353)
+
+# B)
+bank.df = read.csv("bank_marketing.csv", sep=";")
+
+# C)
+discarded_variables = c('contact', 'day_of_week', 'month', 'duration')
+```
+
+I chose to discard the variables 'contact', 'day_of_week' and 'month' when if we want to build a model to predict y because I don't believe there are any relevancy between the predictor and response variables. I think that the whether the contact communication type was a cell phone or a telephone won't impact whether or not the user gets term deposit or not. While I do think that how long ago they were contacted might affect the response variable, bu the exact day of the week or month doesn't help us because we are not provided with a year to give the month any context or a date (as there are multiple Tuesdays in the month e.g) for the day of the week. I also chose to discard 'duration' because in the variables descriptions it says "Thus, this input should only be included for benchmark purposes and should be discarded if the intention is to have a realistic predictive model.". Since we are developing a realistic predictive model I chose to discard this variable as the it is impossible to know the duration of a call before a call and after the end of the call 'y' is know so this isn't really relevant within a predictive model.
+
+## Task 2 - Explore the data
+
+```{r}
+# A)
+# Replacing y=yes with y=1 and y=no with y=0, and discarding all the variables from Task 1c.
+bank.df = bank.df %>%
+  select(-all_of(discarded_variables)) %>%
+  mutate(y = ifelse(y == "yes", 1, 0))
+
+# Splitting the data into training and testing data sets (90% & 10%).
+indices = sample(nrow(bank.df), round(nrow(bank.df) * 0.1))
+train.df = bank.df[-indices,]
+test.df = bank.df[indices,]
+```
+
+```{r}
+# B)
+# Bar Graph
+ggplot(bank.df, aes(x=y, fill=education)) +
+  geom_bar(position="dodge") +
+  scale_x_continuous(breaks = c(0, 1), labels = c("0", "1")) +
+  scale_fill_discrete(name = "Education Level") +
+  xlab("y") + 
+  ylab("Frequency") +
+  labs(title = "A bar graph showing the distribution of \n
+       education levels within responses for each value of y.") +
+  theme_light()
+
+# Density Plot
+ggplot(bank.df, aes(x=age, fill = factor(y), group = y)) +
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(name = "y", values = c("0" = "red", "1" = "blue")) +
+  xlab("Age") + 
+  ylab("Density") +
+  labs(title = "A density plot showing the relationship between 'age' and 'y'.") + 
+  theme_light()
+```
+
+#### Comments on the two visualisations (Part C)
+
+In the bar graph comparing 'y' and 'education' we can see that both y=1 and y=0 there is a similar spread/distribution of education levels with university being the greatest, followed by high school, and with people with an unknown education level being last for both. The only slight change between the two y values are between a basic 9 year qualification and a professional course which are switch around but still very close. Since there are no major outliers and the distribution of the two values of y are very similar we can say that a person education doesn't play a major role as to whether the client has subscribed to a term deposit or not. <br><br>
+
+In the density plot, we can see that the most common age in the dataset is around 30 with ages stretching from around 18 to 96. According to the plot we can see that clients are more likely to not have a term deposit if they are between the ages of around 28 to 65 and they are more likely to have a term deposit if they are between the ages of around 18 to 28 and from 65 to 96. From this information we can say that there is a very strong possibility that a clients age is definitely related to whether the client has subscribed to a term deposit or not. <br><br>
+
+#### Top 3 variables in predicting y (Part D)
+
+I think the top three variables that may be important in predicting y are:
+
+* *job*: This seems like a very important variable as being employed would result in more disposable income to put in a term deposit account. 
+* *pdays*: This variable seems important because if the client hadn't been contacted in a while they would have less incentive to have a term deposit and thus bank. 
+* *poutcome*: I would have to imagine that a successful campaign would result in the client having some relation with the bank which is a lot better than clients who don't and could much more easily translate into them have a term desposit account.
+
+## Task 3 - Model the data
+
+```{r}
+# A) Fitting a series of models on the data
+# Logistic regression
+logistic.model = glm(y ~ ., data = train.df)
+summary(logistic.model)
+
+# Ridge regression
+ridge_y = train.df$y
+ridge_x = train.df %>%
+  select(-y) %>%
+  data.matrix
+
+ridge.model = glmnet(ridge_x, ridge_y, alpha = 0, verbose = FALSE)
+summary(ridge.model) # Couldn't write print(ridge.model) because it displays too much data at once.
+
+# Random Forest (I did min.node.size = 5 because the response variable y is categorical)
+random_forest.model = ranger(y ~ ., data = train.df, classification = TRUE, min.node.size = 5, importance = 'impurity')
+random_forest.model
+
+# XGBoost 
+xgboost_y = train.df$y
+xgboost_x = train.df %>%
+  select(-y) %>%
+  data.matrix
+
+xgboost.model = xgboost(data = xgboost_x, label = xgboost_y, nrounds=100, objective="binary:logistic", verbose = FALSE)
+summary(xgboost.model) # Couldn't write print(xgboost.model) because it displays too much data at once.
+```
+
+```{r warning=FALSE}
+# B) Creating a confusion matrix for each model 
+# Logistic regression
+logistic.pred = round(predict(logistic.model, select(test.df, -y), type = "response"))
+logistic_confusion_matrix = table(Predicted = logistic.pred, Actual = test.df$y)
+logistic_confusion_matrix
+
+# Ridge regression
+ridge_test.df = test.df %>%
+  select(-y) %>%
+  data.matrix
+
+ridge.pred = round(predict(ridge.model, ridge_test.df, type = "response", s = 0.01))
+ridge_confusion_matrix = table(Predicted = ridge.pred, Actual = test.df$y)
+ridge_confusion_matrix
+
+# Random Forest
+random_forest.pred = round(predict(random_forest.model, test.df, type = "response")$predictions)
+rf_confusion_matrix = table(Predicted = random_forest.pred, Actual = test.df$y)
+rf_confusion_matrix
+
+# XGBoost 
+xgboost_test.df = test.df %>%
+  select(-y) %>%
+  data.matrix
+
+xgboost.pred <- round(predict(xgboost.model, xgboost_test.df))
+xgboost_confusion_matrix = table(Predicted = xgboost.pred, Actual = test.df$y)
+xgboost_confusion_matrix
+```
+
+
+## Task 4 - Compare and summarise
+
+```{r}
+# A)
+# Calculating the top six most important variables in the random forest model
+variable_importance.rf = random_forest.model$variable.importance
+variable_importance.rf = variable_importance.rf[order(variable_importance.rf, decreasing = TRUE)]
+variable_importance.rf[1:6]
+
+# Calculating the top six most important variables in the xgboost model
+variable_importance.xgboost = xgb.importance(model = xgboost.model) %>%
+  arrange(desc(Gain)) %>%
+  select(Feature, Gain) %>%
+  head(6) 
+variable_importance.xgboost = setNames(variable_importance.xgboost$Gain, variable_importance.xgboost$Feature)
+variable_importance.xgboost
+```
+
+Out of both of these model's top 6 most important variables, they have 5 of them in common. This shared variables include:
+
+1. euribor3m         
+2. age 
+3. nr_employed         
+4. job    
+5. campaign   
+
+```{r}
+ggplot(bank.df, aes(x = euribor3m, y = y, group = y)) +
+  geom_boxplot(fill = c("lightcoral", "lightblue")) +
+  scale_y_continuous(breaks = c(0, 1), labels = c("0", "1")) + 
+  xlab('Euribor 3 month rate') + 
+  labs(title = "Blox plots showing the relation between the predictors y and euribor3m.") + 
+  theme_light()
+```
+
+These boxplot's clearly show a relation between the predictors y and euribor3m with an increasing value of euribor3m resulting in client more likely not having a term deposit. This is shown by the graph with the mean value of clients without a term deposit being just under 5, and the mean value of clients with a term deposit being much less with a value around 1.4. We can also see this with the IQR of the boxplots with the IQR of the y=0 boxplot being higher than the IQR of the y=1 boxplot (This is because both the UQ and LQ values of the y=0 boxplot are greater than the UQ and LQ values of the y=1 boxplot). In conclusion, while this boxplot might hide certain patterns within the data, it clearly shows how euribor3m is related to the response variable y. 
+
+```{r}
+# B)
+
+# Miss classification rate of the logistic model
+(logistic_confusion_matrix[1, 2] + logistic_confusion_matrix[2, 1]) / nrow(test.df)
+
+# Miss classification rate of the ridge regression model
+(ridge_confusion_matrix[1, 2] + ridge_confusion_matrix[2, 1]) / nrow(test.df)
+
+# Miss classification rate of the random forest model
+(rf_confusion_matrix[1, 2] + rf_confusion_matrix[2, 1]) / nrow(test.df)
+
+# Miss classification rate of the xgboost model
+(xgboost_confusion_matrix[1, 2] + xgboost_confusion_matrix[2, 1]) / nrow(test.df)
+```
+
+Out of the 4 predictive models, the xgboost model had the lowest miss-classification score of 0.1032305, closely followed by the ridge regression and random forest models with a miss-classification score of 0.1034734, then lastly the logistic model with a miss-classification score of 0.1037163. If I had to chose a predictive model, I would choose the xgboost model over the rest of the models as it had the lowest miss classification score and boosting is a more powerful and versatile method compared to the other classification methods. Xgboost models are less likely to overfit to the data and therefore would be able to handle more diverse amounts of training data as well as imbalanced training data without it affecting the output. The xgboost model I used had no hyper parameter tuning and since xgboost models have lots of hyper parameters, there is a good chance that with the right hyper parameters, the xgboost model could get a miss-classification score lower than its current one. 
+
+#### Executive Summary (Part C)
+
+To increase our term deposit subscribers and concentrate our efforts on the more valuable clients, I have developed a machine learning model using the **xgboost methodology** and trained on data we've collected around our clients, which can accurately predict which customers will subscribe to our term deposit with **success rate of 89.7%**. <br>
+I came to this conclusion by undergoing a series of tests to determine the most efficient way to predict whether a client will become a term deposit subscriber with the lowest chance of miss classification. Throughout these tests, I compared the performance of 4 of the most effective machine learning models for this situation:
+
+* a logistic model
+* a ridge regression model
+* a random forest model
+* an xgboost model
+
+The most effective model was the xgboost, with only a 10.3% chance of giving an incorrect prediction. This score is a result of the model determining which variables are related to whether whether or not the client decides to get a term deposit at our bank. Within the xgboost model, the most relevant variables were the euribor 3 month rate, the clients age, and the number of employees making phone calls at the time. With this information the model analyses the data given by the new client and predicts an outcome from the trends of the data of previous clients. <br>
+This predictive model can offer tremendous potential for our proactive marketing initiatives. By focusing our resources on the customers who will most likely become subscribers to our term deposit, we can **significantly increase the returns on this investment** and overall profits for the company. Predictive analysis models give us a unique opportunity to target and accurately identify valuable clients, ensuring more effective and efficient marketing campaigns and better overall **customer satisfaction** with lower use of resources. 
+
+## References
+
+Moro,S., Rita,P., and Cortez,P.. (2012). Bank Marketing. UCI Machine Learning Repository. https://doi.org/10.24432/C5K306.
+
+
+
+
